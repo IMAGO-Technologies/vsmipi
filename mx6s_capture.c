@@ -54,7 +54,7 @@
 #include <media/videobuf2-dma-contig.h>
 
 #define MX6S_CAM_DRV_NAME "mx6s-csi"
-#define MX6S_CAM_VERSION "0.0.1"
+#define MX6S_CAM_VERSION "1.0.0"
 #define MX6S_CAM_DRIVER_DESCRIPTION "i.MX6S_CSI"
 
 #define MAX_VIDEO_MEM 64

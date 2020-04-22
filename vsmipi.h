@@ -22,7 +22,7 @@
 
 //> defines about the Module
 /******************************************************************************************/
-#define MODVERSION "0.9.0.0"
+#define MODVERSION "1.0.0.0"
 #define MODMODULENAME "vsmipi"
 
 #endif /* VSMIPI_H_ */
