@@ -54,7 +54,7 @@
 #include <media/videobuf2-dma-contig.h>
 
 #define MX6S_CAM_DRV_NAME "mx6s-csi"
-#define MX6S_CAM_VERSION "1.0.0"
+#define MX6S_CAM_VERSION "1.1.0"
 #define MX6S_CAM_DRIVER_DESCRIPTION "i.MX6S_CSI"
 
 #define MAX_VIDEO_MEM 64
@@ -764,6 +764,8 @@ static int mx6s_csi_enable(struct mx6s_csi_dev *csi_dev)
 
 	if (pix->field == V4L2_FIELD_INTERLACED)
 		csi_tvdec_enable(csi_dev, true);
+	else
+		csi_tvdec_enable(csi_dev, false);	// https://community.nxp.com/thread/502102
 
 	/* For mipi csi input only */
 	if (csi_dev->csi_mipi_mode == true) {
@@ -1147,7 +1149,7 @@ static irqreturn_t mx6s_csi_irq_handler(int irq, void *data)
 		csi_write(csi_dev, cr18, CSI_CSICR18);
 
 		csi_dev->skipframe = 1;
-		pr_debug("base address switching Change Err.\n");
+		dev_dbg(csi_dev->dev, "base address switching Change Err.\n");
 	}
 
 	if ((status & BIT_DMA_TSF_DONE_FB1) &&
@@ -1159,7 +1161,7 @@ static irqreturn_t mx6s_csi_irq_handler(int irq, void *data)
 		 * when csi work in field0 and field1 will write to
 		 * new base address.
 		 * PDM TKT230775 */
-		pr_debug("Skip two frames\n");
+		dev_dbg(csi_dev->dev, "Skip two frames\n");
 	} else if (status & BIT_DMA_TSF_DONE_FB1) {
 		if (csi_dev->nextfb == 0) {
 			if (csi_dev->skipframe > 0)
@@ -1167,7 +1169,7 @@ static irqreturn_t mx6s_csi_irq_handler(int irq, void *data)
 			else
 				mx6s_csi_frame_done(csi_dev, 0, false);
 		} else
-			pr_warn("skip frame 0\n");
+			dev_dbg(csi_dev->dev, "skip frame 0\n");
 
 	} else if (status & BIT_DMA_TSF_DONE_FB2) {
 		if (csi_dev->nextfb == 1) {
@@ -1176,7 +1178,7 @@ static irqreturn_t mx6s_csi_irq_handler(int irq, void *data)
 			else
 				mx6s_csi_frame_done(csi_dev, 1, false);
 		} else
-			pr_warn("skip frame 1\n");
+			dev_dbg(csi_dev->dev, "skip frame 1\n");
 	}
 
 	spin_unlock(&csi_dev->slock);
@@ -2057,6 +2059,9 @@ static const struct of_device_id mx6s_csi_dt_ids[] = {
 	},
 	{ .compatible = "fsl,imx8mq-csi",
 	  .data = &mx8mq_soc,
+	},
+	{ .compatible = "fsl,imx8mm-csi",
+	  .data = &mx6s_soc,
 	},
 	{ /* sentinel */ }
 };
