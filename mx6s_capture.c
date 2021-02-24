@@ -971,16 +971,19 @@ static void mx6s_stop_streaming(struct vb2_queue *vq)
 	unsigned long flags;
 	struct mx6s_buffer *buf, *tmp;
 	void *b;
+	struct mx6s_buf_internal *ibuf, *itmp;
 
 	mx6s_csi_disable(csi_dev);
 
 	spin_lock_irqsave(&csi_dev->slock, flags);
 
-	list_for_each_entry_safe(buf, tmp,
-				&csi_dev->active_bufs, internal.queue) {
-		list_del_init(&buf->internal.queue);
-		if (buf->vb.vb2_buf.state == VB2_BUF_STATE_ACTIVE)
-			vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+	list_for_each_entry_safe(ibuf, itmp, &csi_dev->active_bufs, queue) {
+		list_del_init(&ibuf->queue);
+		if (!ibuf->discard) {
+			buf = mx6s_ibuf_to_buf(ibuf);
+		    if (buf->vb.vb2_buf.state == VB2_BUF_STATE_ACTIVE)
+				vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+		}
 	}
 
 	list_for_each_entry_safe(buf, tmp,
