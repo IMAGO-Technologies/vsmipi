@@ -682,7 +682,8 @@ static int mx6s_videobuf_setup(struct vb2_queue *vq,
 static int mx6s_videobuf_prepare(struct vb2_buffer *vb)
 {
 	struct mx6s_csi_dev *csi_dev = vb2_get_drv_priv(vb->vb2_queue);
-	int ret = 0;
+	dma_addr_t dma_addr = vb2_dma_contig_plane_dma_addr(vb, 0);
+	unsigned long dma_size = PAGE_ALIGN(csi_dev->pix.sizeimage);
 
 	dev_dbg(csi_dev->dev, "%s (vb=0x%p) 0x%p %lu\n", __func__,
 		vb, vb2_plane_vaddr(vb, 0), vb2_get_plane_payload(vb, 0));
@@ -694,20 +695,29 @@ static int mx6s_videobuf_prepare(struct vb2_buffer *vb)
 	 */
 	if (vb2_plane_vaddr(vb, 0))
 		memset((void *)vb2_plane_vaddr(vb, 0),
-		       0xaa, vb2_get_plane_payload(vb, 0));
+		       0xaa, csi_dev->pix.sizeimage);
 #endif
 
 	vb2_set_plane_payload(vb, 0, csi_dev->pix.sizeimage);
-	if (vb2_plane_vaddr(vb, 0) &&
-	    vb2_get_plane_payload(vb, 0) > vb2_plane_size(vb, 0)) {
-		ret = -EINVAL;
-		goto out;
-	}
+	if (vb2_get_plane_payload(vb, 0) > vb2_plane_size(vb, 0))
+		return -EINVAL;
+	
+	csi_dev->dev->archdata.dma_coherent = 0;
+	dma_sync_single_for_device(csi_dev->dev, dma_addr, dma_size, DMA_FROM_DEVICE);
+	csi_dev->dev->archdata.dma_coherent = 1;
 
 	return 0;
+}
 
-out:
-	return ret;
+void mx6s_videobuf_buf_finish(struct vb2_buffer *vb)
+{
+	struct mx6s_csi_dev *csi_dev = vb2_get_drv_priv(vb->vb2_queue);
+	dma_addr_t dma_addr = vb2_dma_contig_plane_dma_addr(vb, 0);
+	unsigned long dma_size = PAGE_ALIGN(csi_dev->pix.sizeimage);
+
+	csi_dev->dev->archdata.dma_coherent = 0;
+	dma_sync_single_for_cpu(csi_dev->dev, dma_addr, dma_size, DMA_FROM_DEVICE);
+	csi_dev->dev->archdata.dma_coherent = 1;
 }
 
 static void mx6s_videobuf_queue(struct vb2_buffer *vb)
@@ -1011,6 +1021,7 @@ static struct vb2_ops mx6s_videobuf_ops = {
 	.queue_setup     = mx6s_videobuf_setup,
 	.buf_prepare     = mx6s_videobuf_prepare,
 	.buf_queue       = mx6s_videobuf_queue,
+	.buf_finish      = mx6s_videobuf_buf_finish,
 	.wait_prepare    = vb2_ops_wait_prepare,
 	.wait_finish     = vb2_ops_wait_finish,
 	.start_streaming = mx6s_start_streaming,
