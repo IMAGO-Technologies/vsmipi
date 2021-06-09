@@ -341,8 +341,8 @@ struct mx6s_csi_dev {
 	struct list_head	active_bufs;
 	struct list_head	discard;
 
-	void						*discard_buffer;
-	dma_addr_t					discard_buffer_dma;
+	void						*discard_buffer[2];
+	dma_addr_t					discard_buffer_dma[2];
 	size_t						discard_size;
 	struct mx6s_buf_internal	buf_discard[2];
 
@@ -351,6 +351,7 @@ struct mx6s_csi_dev {
 	struct v4l2_async_subdev	*async_subdevs[2];
 
 	bool csi_mipi_mode;
+	bool csi_event_mode;
 	bool csi_two_8bit_sensor_mode;
 	const struct mx6s_csi_soc *soc;
 	struct mx6s_csi_mux csi_mux;
@@ -493,10 +494,11 @@ static void csi_enable_int(struct mx6s_csi_dev *csi_dev, int arg)
 {
 	unsigned long cr1 = __raw_readl(csi_dev->regbase + CSI_CSICR1);
 
-//	cr1 |= BIT_SOF_INTEN;
 //	cr1 |= BIT_EOF_INT_EN;
 	cr1 |= BIT_RFF_OR_INT;
-	if (arg == 1) {
+	if (csi_dev->csi_event_mode)
+		cr1 |= BIT_SOF_INTEN;
+	else if (arg == 1) {
 		/* still capture needs DMA intterrupt */
 		cr1 |= BIT_FB1_DMA_DONE_INTEN;
 		cr1 |= BIT_FB2_DMA_DONE_INTEN;
@@ -574,6 +576,9 @@ static void csi_tvdec_enable(struct mx6s_csi_dev *csi_dev, bool enable)
 				BIT_BASEADDR_SWITCH_EN |
 				BIT_BASEADDR_SWITCH_SEL |
 				BIT_BASEADDR_CHG_ERR_EN);
+		if (csi_dev->csi_event_mode)
+			cr18 |= BIT_BASEADDR_SWITCH_EN |
+					BIT_BASEADDR_SWITCH_SEL;
 		cr1 &= ~BIT_CCIR_MODE;
 		cr1 |= BIT_SOF_POL | BIT_REDGE;
 	}
@@ -926,12 +931,20 @@ static int mx6s_start_streaming(struct vb2_queue *vq, unsigned int count)
 	 * Feel free to work on this ;)
 	 */
 	csi_dev->discard_size = csi_dev->pix.sizeimage;
-	csi_dev->discard_buffer = dma_alloc_coherent(csi_dev->v4l2_dev.dev,
-					PAGE_ALIGN(csi_dev->discard_size),
-					&csi_dev->discard_buffer_dma,
-					GFP_DMA | GFP_KERNEL);
-	if (!csi_dev->discard_buffer)
-		return -ENOMEM;
+	for (i = 0; i < 2; i++) {
+		if (i == 1 && !csi_dev->csi_event_mode) {
+			csi_dev->discard_buffer[1] = csi_dev->discard_buffer[0];
+			csi_dev->discard_buffer_dma[1] = csi_dev->discard_buffer_dma[0];
+		}
+		else {
+			csi_dev->discard_buffer[i] = dma_alloc_coherent(csi_dev->v4l2_dev.dev,
+							PAGE_ALIGN(csi_dev->discard_size),
+							&csi_dev->discard_buffer_dma[i],
+							GFP_DMA | GFP_KERNEL);
+			if (!csi_dev->discard_buffer[i])
+				return -ENOMEM;
+		}
+	}
 
 	spin_lock_irqsave(&csi_dev->slock, flags);
 
@@ -950,8 +963,14 @@ static int mx6s_start_streaming(struct vb2_queue *vq, unsigned int count)
 						struct mx6s_buf_internal, queue);
 			ibuf->bufnum = i;
 
+			if (csi_dev->csi_event_mode) {
+				csi_dev->dev->archdata.dma_coherent = 0;
+				dma_sync_single_for_device(csi_dev->dev, csi_dev->discard_buffer_dma[i], 4096, DMA_FROM_DEVICE);
+				csi_dev->dev->archdata.dma_coherent = 1;
+			}
+
 			mx6s_update_csi_buf(csi_dev,
-						csi_dev->discard_buffer_dma, ibuf->bufnum);
+						csi_dev->discard_buffer_dma[i], ibuf->bufnum);
 			list_move_tail(csi_dev->discard.next, &csi_dev->active_bufs);
 			dev_dbg(csi_dev->dev, "mx6s_start_streaming: adding discard buffer\n");
 		} else {
@@ -980,7 +999,8 @@ static void mx6s_stop_streaming(struct vb2_queue *vq)
 	struct mx6s_csi_dev *csi_dev = vb2_get_drv_priv(vq);
 	unsigned long flags;
 	struct mx6s_buffer *buf, *tmp;
-	void *b;
+	void *b[2];
+	int i;
 	struct mx6s_buf_internal *ibuf, *itmp;
 
 	mx6s_csi_disable(csi_dev);
@@ -1007,14 +1027,19 @@ static void mx6s_stop_streaming(struct vb2_queue *vq)
 	INIT_LIST_HEAD(&csi_dev->active_bufs);
 	INIT_LIST_HEAD(&csi_dev->discard);
 
-	b = csi_dev->discard_buffer;
-	csi_dev->discard_buffer = NULL;
+	b[0] = csi_dev->discard_buffer[0];
+	b[1] = csi_dev->discard_buffer[1];
+	csi_dev->discard_buffer[0] = NULL;
+	csi_dev->discard_buffer[1] = NULL;
 
 	spin_unlock_irqrestore(&csi_dev->slock, flags);
 
-	dma_free_coherent(csi_dev->v4l2_dev.dev,
-				csi_dev->discard_size, b,
-				csi_dev->discard_buffer_dma);
+	for (i = 0 ; i < 2; i++) {
+		if (i == 0 || csi_dev->csi_event_mode)
+			dma_free_coherent(csi_dev->v4l2_dev.dev,
+					csi_dev->discard_size, b[i],
+					csi_dev->discard_buffer_dma[i]);
+	}
 }
 
 static struct vb2_ops mx6s_videobuf_ops = {
@@ -1047,6 +1072,7 @@ static void mx6s_csi_frame_done(struct mx6s_csi_dev *csi_dev,
 		 * Just return it to the discard queue.
 		 */
 		list_move_tail(csi_dev->active_bufs.next, &csi_dev->discard);
+		dev_dbg(csi_dev->dev, "Discard buffer returned.\n");
 	} else {
 		buf = mx6s_ibuf_to_buf(ibuf);
 
@@ -1084,7 +1110,7 @@ static void mx6s_csi_frame_done(struct mx6s_csi_dev *csi_dev,
 	/* Config discard buffer to active_bufs */
 	if (list_empty(&csi_dev->capture)) {
 		if (list_empty(&csi_dev->discard)) {
-			dev_warn(csi_dev->dev,
+			dev_err(csi_dev->dev,
 					"%s: trying to access empty discard list\n",
 					__func__);
 			return;
@@ -1096,8 +1122,15 @@ static void mx6s_csi_frame_done(struct mx6s_csi_dev *csi_dev,
 
 		list_move_tail(csi_dev->discard.next, &csi_dev->active_bufs);
 
+		if (csi_dev->csi_event_mode) {
+			csi_dev->dev->archdata.dma_coherent = 0;
+			dma_sync_single_for_device(csi_dev->dev, csi_dev->discard_buffer_dma[bufnum], 4096, DMA_FROM_DEVICE);
+			csi_dev->dev->archdata.dma_coherent = 1;
+		}
+
 		mx6s_update_csi_buf(csi_dev,
-					csi_dev->discard_buffer_dma, bufnum);
+					csi_dev->discard_buffer_dma[bufnum], bufnum);
+		dev_dbg(csi_dev->dev, "Discard buffer added.\n");
 		return;
 	}
 
@@ -1195,6 +1228,97 @@ static irqreturn_t mx6s_csi_irq_handler(int irq, void *data)
 			dev_dbg(csi_dev->dev, "skip frame 1\n");
 	}
 
+	spin_unlock(&csi_dev->slock);
+
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t mx6s_csi_event_irq_handler(int irq, void *data)
+{
+	struct mx6s_csi_dev *csi_dev =  data;
+	struct mx6s_buf_internal *ibuf;
+	struct mx6s_buffer *buf;
+	unsigned int status;
+
+	spin_lock(&csi_dev->slock);
+
+	status = csi_read(csi_dev, CSI_CSISR);
+	csi_write(csi_dev, status, CSI_CSISR);
+ 
+//	dev_info(csi_dev->dev, "SR: 0x%08x\n", status);
+
+	if (list_empty(&csi_dev->active_bufs)) {
+		dev_warn(csi_dev->dev,
+				"%s: called while active list is empty\n",
+				__func__);
+
+		spin_unlock(&csi_dev->slock);
+		return IRQ_HANDLED;
+	}
+
+	if (status & BIT_RFF_OR_INT) {
+		dev_warn(csi_dev->dev, "%s Rx fifo overflow\n", __func__);
+		if (csi_dev->soc->rx_fifo_rst)
+			csi_error_recovery(csi_dev);
+	}
+
+	if (status & BIT_HRESP_ERR_INT) {
+		dev_warn(csi_dev->dev, "%s Hresponse error detected\n",
+			__func__);
+		csi_error_recovery(csi_dev);
+	}
+
+	if (status & BIT_SOF_INT) {
+		unsigned int* info_line[2];
+		unsigned int i = 0;
+		unsigned char frame_diff;
+		/* 
+		 * active_buf1 - active_buf0 = 1 --> valid frame; else skip
+		 * active_buf0.addr == FB1.addr --> bufnum = 0; else bufnum = 1
+		 * csi_frame_done()
+		 */
+//		dev_dbg(csi_dev->dev, "Start of Frame interrupt.\n");
+		
+		// get frame count of both active_bufs
+		list_for_each_entry(ibuf, &csi_dev->active_bufs, queue) {
+			dma_addr_t dma_addr;
+
+			if (ibuf->discard) {
+				info_line[i] = (unsigned int*)csi_dev->discard_buffer[ibuf->bufnum];
+				dma_addr = csi_dev->discard_buffer_dma[ibuf->bufnum];
+			} else {
+				buf = mx6s_ibuf_to_buf(ibuf);
+				info_line[i] = ((unsigned int*)vb2_plane_vaddr(&buf->vb.vb2_buf, 0));
+				dma_addr = vb2_dma_contig_plane_dma_addr(&buf->vb.vb2_buf, 0);
+			}
+
+			csi_dev->dev->archdata.dma_coherent = 0;
+			dma_sync_single_for_cpu(csi_dev->dev, dma_addr, 4096, DMA_FROM_DEVICE);
+			csi_dev->dev->archdata.dma_coherent = 1;
+
+			i++;
+		}
+
+		dev_dbg(csi_dev->dev, "First word: %u / %u\n", info_line[0][0], info_line[1][0]);
+
+		// check for continous frame counter, else we skip a frame
+		frame_diff = info_line[1][0] - info_line[0][0];
+		if (frame_diff == 1) {
+			
+			// copy event counter into previous frame
+			info_line[0][1] = info_line[1][1];
+			
+			ibuf = list_first_entry(&csi_dev->active_bufs, struct mx6s_buf_internal,
+			       queue);
+			
+			mx6s_csi_frame_done(csi_dev, ibuf->bufnum, false);
+//			dev_dbg(csi_dev->dev, "frame done FB%d\n", ibuf->bufnum);
+		}
+		else {
+			dev_warn(csi_dev->dev, "skipping frame, frame count: %u / %u\n", info_line[0][0], info_line[1][0]);
+		}
+	}
+	
 	spin_unlock(&csi_dev->slock);
 
 	return IRQ_HANDLED;
@@ -1798,6 +1922,12 @@ static int mx6s_csi_mode_sel(struct mx6s_csi_dev *csi_dev)
 		return ret;
 	}
 
+	if (of_get_property(np, "imago,event-mode", NULL))
+		csi_dev->csi_event_mode = true;
+	else {
+		csi_dev->csi_event_mode = false;
+	}
+
 	ret = of_property_read_u32_array(np, "csi-mux-mipi", out_val, 3);
 	if (ret) {
 		dev_dbg(csi_dev->dev, "no csi-mux-mipi property found\n");
@@ -1897,6 +2027,7 @@ static int mx6s_csi_probe(struct platform_device *pdev)
 	struct video_device *vdev;
 	struct resource *res;
 	int ret = 0;
+	irqreturn_t (*irq_handler)(int irq, void *data);
 
 	dev_dbg(dev, "initialising\n");
 
@@ -1996,7 +2127,11 @@ static int mx6s_csi_probe(struct platform_device *pdev)
 	}
 
 	/* install interrupt handler */
-	if (devm_request_irq(dev, csi_dev->irq, mx6s_csi_irq_handler,
+	if (csi_dev->csi_event_mode)
+		irq_handler = mx6s_csi_event_irq_handler;
+	else
+		irq_handler = mx6s_csi_irq_handler;
+	if (devm_request_irq(dev, csi_dev->irq, irq_handler,
 				0, "csi", (void *)csi_dev)) {
 		mutex_unlock(&csi_dev->lock);
 		dev_err(dev, "Request CSI IRQ failed.\n");
