@@ -21,7 +21,6 @@ else
   DEBFLAGS = -O2  
 endif
 
-#ccflags-y := $(DEBFLAGS) -Werror -Wall -Wextra -Wno-unused-parameter -Wno-date-time 
 ccflags-y := $(DEBFLAGS) -Werror -Wall -Wno-unused-parameter -Wno-date-time 
 vsmipi-objs := vspv3_sensor.o
 obj-m	:= vsmipi.o mx6s_capture.o
