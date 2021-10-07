@@ -1597,6 +1597,13 @@ static int mx6s_vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 
 	v4l2_fill_mbus_format(&format.format, pix, fmt->mbus_code);
 	ret = v4l2_subdev_call(sd, pad, set_fmt, NULL, &format);
+
+	// Workaround: reverse height alignment (multiple of 2) done in
+	// mipi_csis_set_fmt() above (mxc_mipi_csi.c). The height value in register
+	// MIPI_CSIS_ISPRESOL_CH0 is still incorrect, but it's only needed for
+	// frame end detection which is not used.
+	format.format.height = pix->height;
+
 	v4l2_fill_pix_format(pix, &format.format);
 
 	if (pix->field != V4L2_FIELD_INTERLACED)
