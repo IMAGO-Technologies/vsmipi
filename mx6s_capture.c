@@ -53,8 +53,9 @@
 #include <media/videobuf2-core.h>
 #include <media/videobuf2-dma-contig.h>
 
+#include "VSMipi.h"	// MODVERSION
+
 #define MX6S_CAM_DRV_NAME "mx6s-csi"
-#define MX6S_CAM_VERSION "1.1.0"
 #define MX6S_CAM_DRIVER_DESCRIPTION "i.MX6S_CSI"
 
 #define MAX_VIDEO_MEM 64
@@ -1859,6 +1860,24 @@ static int mx6s_vidioc_enum_frameintervals(struct file *file, void *priv,
 	return 0;
 }
 
+#define VSMIPI_V4L2_IOCTL_GET_VERSION	_IOR('V', BASE_VIDIOC_PRIVATE + 0, char[32])
+
+static long mx6s_vidioc_default(struct file *file, void *priv,
+				   bool valid_prio, unsigned int cmd, void *arg)
+{
+	long err = 0;
+
+	switch (cmd) {
+	case VSMIPI_V4L2_IOCTL_GET_VERSION:
+		strncpy(arg, MODVERSION, 32);
+		break;
+	default:
+		err = -EINVAL;
+	}
+	
+	return err;
+}
+
 static const struct v4l2_ioctl_ops mx6s_csi_ioctl_ops = {
 	.vidioc_querycap          = mx6s_vidioc_querycap,
 	.vidioc_enum_fmt_vid_cap  = mx6s_vidioc_enum_fmt_vid_cap,
@@ -1886,6 +1905,7 @@ static const struct v4l2_ioctl_ops mx6s_csi_ioctl_ops = {
 	.vidioc_s_parm        = mx6s_vidioc_s_parm,
 	.vidioc_enum_framesizes = mx6s_vidioc_enum_framesizes,
 	.vidioc_enum_frameintervals = mx6s_vidioc_enum_frameintervals,
+	.vidioc_default       = mx6s_vidioc_default,
 };
 
 static int subdev_notifier_bound(struct v4l2_async_notifier *notifier,
@@ -2231,4 +2251,4 @@ module_platform_driver(mx6s_csi_driver);
 MODULE_DESCRIPTION("i.MX6Sx SoC Camera Host driver");
 MODULE_AUTHOR("Freescale Semiconductor, Inc.");
 MODULE_LICENSE("GPL");
-MODULE_VERSION(MX6S_CAM_VERSION);
+MODULE_VERSION(MODVERSION);
