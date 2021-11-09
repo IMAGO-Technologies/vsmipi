@@ -1,14 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright (C) 2014-2016 Freescale Semiconductor, Inc. All Rights Reserved.
- */
-
-/*
- * The code contained herein is licensed under the GNU General Public
- * License. You may obtain a copy of the GNU General Public License
- * Version 2 or later at the following locations:
- *
- * http://www.opensource.org/licenses/gpl-license.html
- * http://www.gnu.org/copyleft/gpl.html
+ * Copyright 2019 NXP
  */
 
 /*!
@@ -19,6 +12,7 @@
  * @ingroup CSI
  */
 #include <asm/dma.h>
+#include <linux/version.h>
 #include <linux/busfreq-imx.h>
 #include <linux/clk.h>
 #include <linux/dma-mapping.h>
@@ -180,6 +174,10 @@
 #define NUM_FORMATS ARRAY_SIZE(formats)
 #define MX6SX_MAX_SENSORS    1
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,7,0)
+#define VFL_TYPE_VIDEO VFL_TYPE_GRABBER
+#endif
+
 struct csi_signal_cfg_t {
 	unsigned data_width:3;
 	unsigned clk_mode:2;
@@ -319,6 +317,8 @@ struct mx6s_csi_dev {
 	struct mutex		lock;
 	spinlock_t			slock;
 
+	int open_count;
+
 	/* clock */
 	struct clk	*clk_disp_axi;
 	struct clk	*clk_disp_dcic;
@@ -349,7 +349,9 @@ struct mx6s_csi_dev {
 
 	struct v4l2_async_subdev	asd;
 	struct v4l2_async_notifier	subdev_notifier;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,20,0)
 	struct v4l2_async_subdev	*async_subdevs[2];
+#endif
 
 	bool csi_mipi_mode;
 	bool csi_event_mode;
@@ -359,6 +361,36 @@ struct mx6s_csi_dev {
 };
 
 static const struct of_device_id mx6s_csi_dt_ids[];
+
+static inline void __dma_sync_for_device(struct device *dev, dma_addr_t dma_addr, unsigned long dma_size)
+{
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,20,0)
+	dev->archdata.dma_coherent = 0;
+#else
+	dev->dma_coherent = 0;
+#endif
+	dma_sync_single_for_device(dev, dma_addr, dma_size, DMA_FROM_DEVICE);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,20,0)
+	dev->archdata.dma_coherent = 1;
+#else
+	dev->dma_coherent = 1;
+#endif
+}
+
+static inline void __dma_sync_for_cpu(struct device *dev, dma_addr_t dma_addr, unsigned long dma_size)
+{
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,20,0)
+	dev->archdata.dma_coherent = 0;
+#else
+	dev->dma_coherent = 0;
+#endif
+	dma_sync_single_for_cpu(dev, dma_addr, dma_size, DMA_FROM_DEVICE);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,20,0)
+	dev->archdata.dma_coherent = 1;
+#else
+	dev->dma_coherent = 1;
+#endif
+}
 
 static inline int csi_read(struct mx6s_csi_dev *csi, unsigned int offset)
 {
@@ -708,9 +740,7 @@ static int mx6s_videobuf_prepare(struct vb2_buffer *vb)
 	if (vb2_get_plane_payload(vb, 0) > vb2_plane_size(vb, 0))
 		return -EINVAL;
 	
-	csi_dev->dev->archdata.dma_coherent = 0;
-	dma_sync_single_for_device(csi_dev->dev, dma_addr, dma_size, DMA_FROM_DEVICE);
-	csi_dev->dev->archdata.dma_coherent = 1;
+	__dma_sync_for_device(csi_dev->dev, dma_addr, dma_size);
 
 	return 0;
 }
@@ -721,9 +751,7 @@ void mx6s_videobuf_buf_finish(struct vb2_buffer *vb)
 	dma_addr_t dma_addr = vb2_dma_contig_plane_dma_addr(vb, 0);
 	unsigned long dma_size = PAGE_ALIGN(csi_dev->pix.sizeimage);
 
-	csi_dev->dev->archdata.dma_coherent = 0;
-	dma_sync_single_for_cpu(csi_dev->dev, dma_addr, dma_size, DMA_FROM_DEVICE);
-	csi_dev->dev->archdata.dma_coherent = 1;
+	__dma_sync_for_cpu(csi_dev->dev, dma_addr, dma_size);
 }
 
 static void mx6s_videobuf_queue(struct vb2_buffer *vb)
@@ -964,11 +992,8 @@ static int mx6s_start_streaming(struct vb2_queue *vq, unsigned int count)
 						struct mx6s_buf_internal, queue);
 			ibuf->bufnum = i;
 
-			if (csi_dev->csi_event_mode) {
-				csi_dev->dev->archdata.dma_coherent = 0;
-				dma_sync_single_for_device(csi_dev->dev, csi_dev->discard_buffer_dma[i], 4096, DMA_FROM_DEVICE);
-				csi_dev->dev->archdata.dma_coherent = 1;
-			}
+			if (csi_dev->csi_event_mode)
+				__dma_sync_for_device(csi_dev->dev, csi_dev->discard_buffer_dma[i], 4096);
 
 			mx6s_update_csi_buf(csi_dev,
 						csi_dev->discard_buffer_dma[i], ibuf->bufnum);
@@ -1123,11 +1148,8 @@ static void mx6s_csi_frame_done(struct mx6s_csi_dev *csi_dev,
 
 		list_move_tail(csi_dev->discard.next, &csi_dev->active_bufs);
 
-		if (csi_dev->csi_event_mode) {
-			csi_dev->dev->archdata.dma_coherent = 0;
-			dma_sync_single_for_device(csi_dev->dev, csi_dev->discard_buffer_dma[bufnum], 4096, DMA_FROM_DEVICE);
-			csi_dev->dev->archdata.dma_coherent = 1;
-		}
+		if (csi_dev->csi_event_mode)
+			__dma_sync_for_device(csi_dev->dev, csi_dev->discard_buffer_dma[bufnum], 4096);
 
 		mx6s_update_csi_buf(csi_dev,
 					csi_dev->discard_buffer_dma[bufnum], bufnum);
@@ -1293,9 +1315,7 @@ static irqreturn_t mx6s_csi_event_irq_handler(int irq, void *data)
 				dma_addr = vb2_dma_contig_plane_dma_addr(&buf->vb.vb2_buf, 0);
 			}
 
-			csi_dev->dev->archdata.dma_coherent = 0;
-			dma_sync_single_for_cpu(csi_dev->dev, dma_addr, 4096, DMA_FROM_DEVICE);
-			csi_dev->dev->archdata.dma_coherent = 1;
+			__dma_sync_for_cpu(csi_dev->dev, dma_addr, 4096);
 
 			i++;
 		}
@@ -1340,26 +1360,27 @@ static int mx6s_csi_open(struct file *file)
 	if (mutex_lock_interruptible(&csi_dev->lock))
 		return -ERESTARTSYS;
 
-	q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	q->io_modes = VB2_MMAP | VB2_USERPTR;
-	q->drv_priv = csi_dev;
-	q->ops = &mx6s_videobuf_ops;
-	q->mem_ops = &vb2_dma_contig_memops;
-	q->buf_struct_size = sizeof(struct mx6s_buffer);
-	q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
-	q->lock = &csi_dev->lock;
+	if (csi_dev->open_count++ == 0) {
+		q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		q->io_modes = VB2_MMAP | VB2_USERPTR;
+		q->drv_priv = csi_dev;
+		q->ops = &mx6s_videobuf_ops;
+		q->mem_ops = &vb2_dma_contig_memops;
+		q->buf_struct_size = sizeof(struct mx6s_buffer);
+		q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+		q->lock = &csi_dev->lock;
 
-	ret = vb2_queue_init(q);
-	if (ret < 0)
-		goto unlock;
+		ret = vb2_queue_init(q);
+		if (ret < 0)
+			goto unlock;
 
-	pm_runtime_get_sync(csi_dev->dev);
+		pm_runtime_get_sync(csi_dev->dev);
 
-	request_bus_freq(BUS_FREQ_HIGH);
+		request_bus_freq(BUS_FREQ_HIGH);
 
-	v4l2_subdev_call(sd, core, s_power, 1);
-	mx6s_csi_init(csi_dev);
-
+		v4l2_subdev_call(sd, core, s_power, 1);
+		mx6s_csi_init(csi_dev);
+	}
 	mutex_unlock(&csi_dev->lock);
 
 	return ret;
@@ -1375,18 +1396,20 @@ static int mx6s_csi_close(struct file *file)
 
 	mutex_lock(&csi_dev->lock);
 
-	vb2_queue_release(&csi_dev->vb2_vidq);
+	if (--csi_dev->open_count == 0) {
+		vb2_queue_release(&csi_dev->vb2_vidq);
 
-	mx6s_csi_deinit(csi_dev);
-	v4l2_subdev_call(sd, core, s_power, 0);
+		mx6s_csi_deinit(csi_dev);
+		v4l2_subdev_call(sd, core, s_power, 0);
 
+		file->private_data = NULL;
+
+		release_bus_freq(BUS_FREQ_HIGH);
+
+		pm_runtime_put_sync_suspend(csi_dev->dev);
+	}
 	mutex_unlock(&csi_dev->lock);
 
-	file->private_data = NULL;
-
-	release_bus_freq(BUS_FREQ_HIGH);
-
-	pm_runtime_put_sync_suspend(csi_dev->dev);
 	return 0;
 }
 
@@ -1405,24 +1428,6 @@ static ssize_t mx6s_csi_read(struct file *file, char __user *buf,
 	return ret;
 }
 
-static int mx6s_csi_mmap(struct file *file, struct vm_area_struct *vma)
-{
-	struct mx6s_csi_dev *csi_dev = video_drvdata(file);
-	int ret;
-
-	if (mutex_lock_interruptible(&csi_dev->lock))
-		return -ERESTARTSYS;
-	ret = vb2_mmap(&csi_dev->vb2_vidq, vma);
-	mutex_unlock(&csi_dev->lock);
-
-	pr_debug("vma start=0x%08lx, size=%ld, ret=%d\n",
-		(unsigned long)vma->vm_start,
-		(unsigned long)vma->vm_end-(unsigned long)vma->vm_start,
-		ret);
-
-	return ret;
-}
-
 static struct v4l2_file_operations mx6s_csi_fops = {
 	.owner		= THIS_MODULE,
 	.open		= mx6s_csi_open,
@@ -1430,7 +1435,7 @@ static struct v4l2_file_operations mx6s_csi_fops = {
 	.read		= mx6s_csi_read,
 	.poll		= vb2_fop_poll,
 	.unlocked_ioctl	= video_ioctl2, /* V4L2 ioctl handler */
-	.mmap		= mx6s_csi_mmap,
+	.mmap		= vb2_fop_mmap,
 };
 
 /*
@@ -1524,7 +1529,11 @@ static int mx6s_vidioc_qbuf(struct file *file, void *priv,
 
 	WARN_ON(priv != file->private_data);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,20,0)
 	return vb2_qbuf(&csi_dev->vb2_vidq, p);
+#else
+	return vb2_qbuf(&csi_dev->vb2_vidq, NULL, p);
+#endif
 }
 
 static int mx6s_vidioc_dqbuf(struct file *file, void *priv,
@@ -1611,6 +1620,10 @@ static int mx6s_vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 
 	pix->sizeimage = fmt->bpp * pix->height * pix->width;
 	pix->bytesperline = fmt->bpp * pix->width;
+
+	pix->colorspace = V4L2_COLORSPACE_SRGB;
+	pix->ycbcr_enc = V4L2_MAP_YCBCR_ENC_DEFAULT(pix->colorspace);
+	pix->quantization = V4L2_QUANTIZATION_FULL_RANGE;
 
 	return ret;
 }
@@ -1710,6 +1723,7 @@ static int mx6s_vidioc_streamoff(struct file *file, void *priv,
 {
 	struct mx6s_csi_dev *csi_dev = video_drvdata(file);
 	struct v4l2_subdev *sd = csi_dev->sd;
+	int ret;
 
 	WARN_ON(priv != file->private_data);
 
@@ -1720,12 +1734,15 @@ static int mx6s_vidioc_streamoff(struct file *file, void *priv,
 	 * This calls buf_release from host driver's videobuf_queue_ops for all
 	 * remaining buffers. When the last buffer is freed, stop capture
 	 */
-	vb2_streamoff(&csi_dev->vb2_vidq, i);
+	ret = vb2_streamoff(&csi_dev->vb2_vidq, i);
 
-	v4l2_subdev_call(sd, video, s_stream, 0);
+	if (!ret)
+		v4l2_subdev_call(sd, video, s_stream, 0);
 
-	return 0;
+	return ret;
 }
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,0,0)
 
 static int mx6s_vidioc_cropcap(struct file *file, void *fh,
 			      struct v4l2_cropcap *a)
@@ -1763,6 +1780,47 @@ static int mx6s_vidioc_s_crop(struct file *file, void *priv,
 
 	return 0;
 }
+
+#else
+
+static int mx6s_vidioc_g_pixelaspect(struct file *file, void *fh,
+			       int type, struct v4l2_fract *f)
+{
+	struct mx6s_csi_dev *csi_dev = video_drvdata(file);
+
+	if (type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+		return -EINVAL;
+	dev_dbg(csi_dev->dev, "G_PIXELASPECT not implemented\n");
+
+	return 0;
+}
+
+static int mx6s_vidioc_g_selection(struct file *file, void *priv,
+			     struct v4l2_selection *s)
+{
+	struct mx6s_csi_dev *csi_dev = video_drvdata(file);
+
+	if (s->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+		return -EINVAL;
+	dev_dbg(csi_dev->dev, "VIDIOC_G_SELECTION not implemented\n");
+
+	return 0;
+}
+
+static int mx6s_vidioc_s_selection(struct file *file, void *priv,
+			     struct v4l2_selection *s)
+{
+	struct mx6s_csi_dev *csi_dev = video_drvdata(file);
+
+	if (s->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+		return -EINVAL;
+
+	dev_dbg(csi_dev->dev, "VIDIOC_S_SELECTION not implemented\n");
+
+	return 0;
+}
+
+#endif
 
 static int mx6s_vidioc_g_parm(struct file *file, void *priv,
 			     struct v4l2_streamparm *a)
@@ -1891,9 +1949,15 @@ static const struct v4l2_ioctl_ops mx6s_csi_ioctl_ops = {
 	.vidioc_try_fmt_vid_cap   = mx6s_vidioc_try_fmt_vid_cap,
 	.vidioc_g_fmt_vid_cap     = mx6s_vidioc_g_fmt_vid_cap,
 	.vidioc_s_fmt_vid_cap     = mx6s_vidioc_s_fmt_vid_cap,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,0,0)
 	.vidioc_cropcap       = mx6s_vidioc_cropcap,
 	.vidioc_s_crop        = mx6s_vidioc_s_crop,
 	.vidioc_g_crop        = mx6s_vidioc_g_crop,
+#else
+	.vidioc_g_pixelaspect = mx6s_vidioc_g_pixelaspect,
+	.vidioc_s_selection   = mx6s_vidioc_s_selection,
+	.vidioc_g_selection   = mx6s_vidioc_g_selection,
+#endif
 	.vidioc_reqbufs       = mx6s_vidioc_reqbufs,
 	.vidioc_create_bufs		= vb2_ioctl_create_bufs,
 	.vidioc_querybuf      = mx6s_vidioc_querybuf,
@@ -1921,12 +1985,12 @@ static int subdev_notifier_bound(struct v4l2_async_notifier *notifier,
 {
 	struct mx6s_csi_dev *csi_dev = notifier_to_mx6s_dev(notifier);
 
+	if (subdev == NULL)
+		return -EINVAL;
+
 	/* Find platform data for this sensor subdev */
 	if (csi_dev->asd.match.fwnode == dev_fwnode(subdev->dev))
 		csi_dev->sd = subdev;
-
-	if (subdev == NULL)
-		return -EINVAL;
 
 	v4l2_info(&csi_dev->v4l2_dev, "Registered sensor subdevice: %s\n",
 		  subdev->name);
@@ -2007,6 +2071,10 @@ static int mx6sx_register_subdevs(struct mx6s_csi_dev *csi_dev)
 	struct device_node *node, *port, *rem;
 	int ret;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,20,0)
+	v4l2_async_notifier_init(&csi_dev->subdev_notifier);
+#endif
+
 	/* Attach sensors linked to csi receivers */
 	for_each_available_child_of_node(parent, node) {
 		if (of_node_cmp(node->name, "port"))
@@ -2027,14 +2095,24 @@ static int mx6sx_register_subdevs(struct mx6s_csi_dev *csi_dev)
 
 		csi_dev->asd.match_type = V4L2_ASYNC_MATCH_FWNODE;
 		csi_dev->asd.match.fwnode = of_fwnode_handle(rem);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,20,0)
 		csi_dev->async_subdevs[0] = &csi_dev->asd;
+#else
+		ret = v4l2_async_notifier_add_subdev(&csi_dev->subdev_notifier,
+						&csi_dev->asd);
+		if (ret) {
+			of_node_put(rem);
+		}
+#endif
 
 		of_node_put(rem);
 		break;
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,20,0)
 	csi_dev->subdev_notifier.subdevs = csi_dev->async_subdevs;
 	csi_dev->subdev_notifier.num_subdevs = 1;
+#endif
 	csi_dev->subdev_notifier.ops = &mx6s_capture_async_ops;
 
 	ret = v4l2_async_notifier_register(&csi_dev->v4l2_dev,
@@ -2056,7 +2134,7 @@ static int mx6s_csi_probe(struct platform_device *pdev)
 	int ret = 0;
 	irqreturn_t (*irq_handler)(int irq, void *data);
 
-	dev_dbg(dev, "initialising\n");
+	dev_info(dev, "initialising\n");
 
 	/* Prepare our private structure */
 	csi_dev = devm_kzalloc(dev, sizeof(struct mx6s_csi_dev), GFP_ATOMIC);
@@ -2138,6 +2216,7 @@ static int mx6s_csi_probe(struct platform_device *pdev)
 	vdev->ioctl_ops		= &mx6s_csi_ioctl_ops;
 	vdev->release		= video_device_release;
 	vdev->lock			= &csi_dev->lock;
+	vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
 
 	vdev->queue = &csi_dev->vb2_vidq;
 
@@ -2146,7 +2225,7 @@ static int mx6s_csi_probe(struct platform_device *pdev)
 	video_set_drvdata(csi_dev->vdev, csi_dev);
 	mutex_lock(&csi_dev->lock);
 
-	ret = video_register_device(csi_dev->vdev, VFL_TYPE_GRABBER, -1);
+	ret = video_register_device(csi_dev->vdev, VFL_TYPE_VIDEO, -1);
 	if (ret < 0) {
 		video_device_release(csi_dev->vdev);
 		mutex_unlock(&csi_dev->lock);
