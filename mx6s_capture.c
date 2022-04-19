@@ -1014,6 +1014,7 @@ static int mx6s_start_streaming(struct vb2_queue *vq, unsigned int count)
 	}
 
 	csi_dev->nextfb = 0;
+	csi_dev->frame_count = 0;
 
 	spin_unlock_irqrestore(&csi_dev->slock, flags);
 
@@ -1130,7 +1131,6 @@ static void mx6s_csi_frame_done(struct mx6s_csi_dev *csi_dev,
 			vb2_buffer_done(vb, VB2_BUF_STATE_DONE);
 	}
 
-	csi_dev->frame_count++;
 	csi_dev->nextfb = (bufnum == 0 ? 1 : 0);
 
 	/* Config discard buffer to active_bufs */
@@ -1204,6 +1204,8 @@ static irqreturn_t mx6s_csi_irq_handler(int irq, void *data)
 	}
 
 	if (status & BIT_ADDR_CH_ERR_INT) {
+		// should only occur if base address switching is enabled (interlaced mode)
+
 		/* Disable csi  */
 		cr18 = csi_read(csi_dev, CSI_CSICR18);
 		cr18 &= ~BIT_CSI_ENABLE;
@@ -1231,6 +1233,7 @@ static irqreturn_t mx6s_csi_irq_handler(int irq, void *data)
 		 * when csi work in field0 and field1 will write to
 		 * new base address.
 		 * PDM TKT230775 */
+		csi_dev->frame_count += 2;
 		dev_dbg(csi_dev->dev, "Skip two frames\n");
 	} else if (status & BIT_DMA_TSF_DONE_FB1) {
 		if (csi_dev->nextfb == 0) {
@@ -1238,17 +1241,20 @@ static irqreturn_t mx6s_csi_irq_handler(int irq, void *data)
 				csi_dev->skipframe--;
 			else
 				mx6s_csi_frame_done(csi_dev, 0, false);
-		} else
+		} else {
 			dev_dbg(csi_dev->dev, "skip frame 0\n");
-
+		}
+		csi_dev->frame_count++;
 	} else if (status & BIT_DMA_TSF_DONE_FB2) {
 		if (csi_dev->nextfb == 1) {
 			if (csi_dev->skipframe > 0)
 				csi_dev->skipframe--;
 			else
 				mx6s_csi_frame_done(csi_dev, 1, false);
-		} else
+		} else {
 			dev_dbg(csi_dev->dev, "skip frame 1\n");
+		}
+		csi_dev->frame_count++;
 	}
 
 	spin_unlock(&csi_dev->slock);
