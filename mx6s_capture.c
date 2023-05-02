@@ -241,7 +241,6 @@ struct csi_config_t {
  */
 struct mx6s_fmt {
 	char  name[32];
-	u32   fourcc;		/* v4l2 format id */
 	u32   pixelformat;
 	u32   mbus_code;
 	int   bpp;
@@ -250,35 +249,40 @@ struct mx6s_fmt {
 static struct mx6s_fmt formats[] = {
 	{
 		.name		= "GRAY-8",
-		.fourcc		= V4L2_PIX_FMT_GREY,
 		.pixelformat	= V4L2_PIX_FMT_GREY,
 		.mbus_code	= MEDIA_BUS_FMT_Y8_1X8,
 		.bpp		= 1,
 	}, {
 		.name		= "UYVY-16",
-		.fourcc		= V4L2_PIX_FMT_UYVY,
 		.pixelformat	= V4L2_PIX_FMT_UYVY,
 		.mbus_code	= MEDIA_BUS_FMT_UYVY8_2X8,
 		.bpp		= 2,
 	}, {
 		.name		= "YUYV-16",
-		.fourcc		= V4L2_PIX_FMT_YUYV,
 		.pixelformat	= V4L2_PIX_FMT_YUYV,
 		.mbus_code	= MEDIA_BUS_FMT_YUYV8_2X8,
 		.bpp		= 2,
 	}, {
 		.name		= "YUV32 (X-Y-U-V)",
-		.fourcc		= V4L2_PIX_FMT_YUV32,
 		.pixelformat	= V4L2_PIX_FMT_YUV32,
 		.mbus_code	= MEDIA_BUS_FMT_AYUV8_1X32,
 		.bpp		= 4,
 	}, {
 		.name		= "RAWRGB8 (SBGGR8)",
-		.fourcc		= V4L2_PIX_FMT_SBGGR8,
 		.pixelformat	= V4L2_PIX_FMT_SBGGR8,
 		.mbus_code	= MEDIA_BUS_FMT_SBGGR8_1X8,
 		.bpp		= 1,
-	}
+	}, {
+		.name		= "RAWRGB8 (SBGGR8)",
+		.pixelformat	= V4L2_PIX_FMT_SBGGR10ALAW8,
+		.mbus_code	= MEDIA_BUS_FMT_SBGGR10_ALAW8_1X8,
+		.bpp		= 1,
+	}, {
+		.name		= "RAWRGB10 (SBGGR10)",
+		.pixelformat	= V4L2_PIX_FMT_SBGGR10,
+		.mbus_code	= MEDIA_BUS_FMT_SBGGR10_1X10,
+		.bpp		= 2,
+ 	}
 };
 
 struct mx6s_buf_internal {
@@ -899,7 +903,11 @@ static int mx6s_configure_csi(struct mx6s_csi_dev *csi_dev)
 	case V4L2_PIX_FMT_GREY:
 	case V4L2_PIX_FMT_YUV32:
 	case V4L2_PIX_FMT_SBGGR8:
+	case V4L2_PIX_FMT_SBGGR10:
 		width = pix->width;
+		break;
+	case V4L2_PIX_FMT_SBGGR10ALAW8:
+		width = pix->width / 2;
 		break;
 	case V4L2_PIX_FMT_UYVY:
 	case V4L2_PIX_FMT_YUYV:
@@ -918,6 +926,12 @@ static int mx6s_configure_csi(struct mx6s_csi_dev *csi_dev)
 	if (csi_dev->csi_mipi_mode == true) {
 		cr1 = csi_read(csi_dev, CSI_CSICR1);
 		cr1 &= ~BIT_GCLK_MODE;
+		csi_dev->csi_two_8bit_sensor_mode = false;
+		if (csi_dev->fmt->pixelformat == V4L2_PIX_FMT_SBGGR10)
+		{
+			cr1 |= BIT_PIXEL_BIT;
+			csi_dev->csi_two_8bit_sensor_mode = true;
+		}
 		csi_write(csi_dev, cr1, CSI_CSICR1);
 
 		cr18 = csi_read(csi_dev, CSI_CSICR18);
@@ -932,6 +946,10 @@ static int mx6s_configure_csi(struct mx6s_csi_dev *csi_dev)
 		case V4L2_PIX_FMT_GREY:
 		case V4L2_PIX_FMT_SBGGR8:
 			cr18 |= BIT_MIPI_DATA_FORMAT_RAW8;
+			break;
+		case V4L2_PIX_FMT_SBGGR10:
+		case V4L2_PIX_FMT_SBGGR10ALAW8:
+			cr18 |= BIT_MIPI_DATA_FORMAT_RAW10;
 			break;
 		default:
 			pr_debug("   fmt not supported\n");
@@ -1612,6 +1630,11 @@ static int mx6s_vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 
 	v4l2_fill_mbus_format(&format.format, pix, fmt->mbus_code);
 	ret = v4l2_subdev_call(sd, pad, set_fmt, NULL, &format);
+	if (format.format.code != fmt->mbus_code) {
+		dev_err(csi_dev->dev, "pixel format %4.4s is not supported by the MIPI-CSI receiver driver.\n",
+				(char *)&f->fmt.pix.pixelformat);
+		return -EINVAL;
+	}
 
 	// Workaround: reverse height alignment (multiple of 2) done in
 	// mipi_csis_set_fmt() above (mxc_mipi_csi.c). The height value in register

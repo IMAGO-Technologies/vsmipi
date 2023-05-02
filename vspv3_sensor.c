@@ -50,6 +50,8 @@ struct sensor_mipi_datafmt {
 
 static const struct sensor_mipi_datafmt sensor_colour_fmts[] = {
 	{MEDIA_BUS_FMT_SBGGR8_1X8, V4L2_COLORSPACE_RAW},
+	{MEDIA_BUS_FMT_SBGGR10_1X10, V4L2_COLORSPACE_RAW},
+	{MEDIA_BUS_FMT_SBGGR10_ALAW8_1X8, V4L2_COLORSPACE_RAW},
 };
 
 
