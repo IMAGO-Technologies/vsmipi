@@ -22,7 +22,7 @@
 
 //> defines about the Module
 /******************************************************************************************/
-#define MODVERSION "1.3.0.0"	// (also used as DKMS module version)
+#define MODVERSION "1.3.0.1"	// (also used as DKMS module version)
 #define MODMODULENAME "vsmipi"
 
 #endif /* VSMIPI_H_ */
