@@ -47,7 +47,7 @@
 #include <media/videobuf2-core.h>
 #include <media/videobuf2-dma-contig.h>
 
-#include "VSMipi.h"	// MODVERSION
+#include "vsmipi.h"	// MODVERSION
 
 #define MX6S_CAM_DRV_NAME "mx6s-csi"
 #define MX6S_CAM_DRIVER_DESCRIPTION "i.MX6S_CSI"
