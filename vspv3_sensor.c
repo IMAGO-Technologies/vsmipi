@@ -16,6 +16,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/version.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/ctype.h>
@@ -32,6 +33,11 @@
 #include "vsmipi.h"
 
 #define DEFAULT_FPS 30
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,14,0)
+	#define v4l2_subdev_state v4l2_subdev_pad_config
+#endif
+
 
 struct sensor_mipi {
 	struct v4l2_subdev		subdev;
@@ -183,7 +189,7 @@ static int sensor_mipi_s_param(struct v4l2_subdev *sd, struct v4l2_streamparm *a
 }
 
 static int sensor_mipi_set_fmt(struct v4l2_subdev *sd,
-			struct v4l2_subdev_pad_config *cfg,
+			struct v4l2_subdev_state *state,
 			struct v4l2_subdev_format *format)
 {
 	struct v4l2_mbus_framefmt *mf = &format->format;
@@ -215,7 +221,7 @@ static int sensor_mipi_set_fmt(struct v4l2_subdev *sd,
 
 
 static int sensor_mipi_get_fmt(struct v4l2_subdev *sd,
-			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_state *state,
 			  struct v4l2_subdev_format *format)
 {
 	struct v4l2_mbus_framefmt *mf = &format->format;
@@ -236,7 +242,7 @@ static int sensor_mipi_get_fmt(struct v4l2_subdev *sd,
 }
 
 static int sensor_mipi_enum_mbus_code(struct v4l2_subdev *sd,
-				 struct v4l2_subdev_pad_config *cfg,
+				 struct v4l2_subdev_state *state,
 				 struct v4l2_subdev_mbus_code_enum *code)
 {
 	if (code->pad || code->index >= ARRAY_SIZE(sensor_colour_fmts))
@@ -255,7 +261,7 @@ static int sensor_mipi_enum_mbus_code(struct v4l2_subdev *sd,
  * Return 0 if successful, otherwise -EINVAL.
  */
 static int sensor_mipi_enum_framesizes(struct v4l2_subdev *sd,
-			       struct v4l2_subdev_pad_config *cfg,
+			       struct v4l2_subdev_state *state,
 			       struct v4l2_subdev_frame_size_enum *fse)
 {
 	if (fse->index != 0)
@@ -278,7 +284,7 @@ static int sensor_mipi_enum_framesizes(struct v4l2_subdev *sd,
  * Return 0 if successful, otherwise -EINVAL.
  */
 static int sensor_mipi_enum_frameintervals(struct v4l2_subdev *sd,
-		struct v4l2_subdev_pad_config *cfg,
+		struct v4l2_subdev_state *state,
 		struct v4l2_subdev_frame_interval_enum *fie)
 {
 	struct device *dev = sd->dev;
@@ -363,15 +369,20 @@ static int sensor_mipi_probe(struct platform_device *pdev)
 //	sensor->subdev.grp_id = 678;
 
 	retval = v4l2_async_register_subdev(&sensor->subdev);
-	if (retval < 0)
-		dev_err(dev, "Async register failed, ret=%d\n",
-			retval);
+	if (retval < 0) {
+		dev_err(dev, "Async register failed (%d)\n", retval);
+		return retval;
+	}
 
 	dev_info(dev, "v4l subdev registered\n");
 	return retval;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,11,0)
 static int sensor_mipi_remove(struct platform_device *pdev)
+#else
+static void sensor_mipi_remove(struct platform_device *pdev)
+#endif
 {
 	struct sensor_mipi *sensor = platform_get_drvdata(pdev);
 
@@ -379,7 +390,9 @@ static int sensor_mipi_remove(struct platform_device *pdev)
 
 //	clk_disable_unprepare(sensor->sensor_clk);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,10,0)
 	return 0;
+#endif
 }
 
 #ifdef CONFIG_OF
