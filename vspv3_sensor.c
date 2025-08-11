@@ -368,7 +368,11 @@ static int sensor_mipi_probe(struct platform_device *pdev)
 		 KBUILD_MODNAME, dev_name(dev));
 //	sensor->subdev.grp_id = 678;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,13,0)
 	retval = v4l2_async_register_subdev(&sensor->subdev);
+#else
+	retval = v4l2_async_register_subdev_sensor(&sensor->subdev);
+#endif
 	if (retval < 0) {
 		dev_err(dev, "Async register failed (%d)\n", retval);
 		return retval;
