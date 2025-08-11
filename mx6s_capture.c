@@ -178,6 +178,11 @@
 #define VFL_TYPE_VIDEO VFL_TYPE_GRABBER
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,6,0)
+#define v4l2_async_connection v4l2_async_subdev
+#endif
+
+
 struct csi_signal_cfg_t {
 	unsigned data_width:3;
 	unsigned clk_mode:2;
@@ -351,12 +356,11 @@ struct mx6s_csi_dev {
 	size_t						discard_size;
 	struct mx6s_buf_internal	buf_discard[2];
 
+	struct fwnode_handle		*fwnode;
 	struct v4l2_async_notifier	subdev_notifier;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6,6,0)
 	struct v4l2_async_subdev	asd;
 	struct v4l2_async_subdev	*async_subdevs[2];
-#else
-	struct fwnode_handle		*fwnode;
 #endif
 
 	bool csi_mipi_mode;
@@ -2011,26 +2015,6 @@ static const struct v4l2_ioctl_ops mx6s_csi_ioctl_ops = {
 	.vidioc_default       = mx6s_vidioc_default,
 };
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6,6,0)
-static int subdev_notifier_bound(struct v4l2_async_notifier *notifier,
-			    struct v4l2_subdev *subdev,
-			    struct v4l2_async_subdev *asd)
-{
-	struct mx6s_csi_dev *csi_dev = notifier_to_mx6s_dev(notifier);
-
-	if (subdev == NULL)
-		return -EINVAL;
-
-	/* Find platform data for this sensor subdev */
-	if (csi_dev->asd.match.fwnode == dev_fwnode(subdev->dev))
-		csi_dev->sd = subdev;
-
-	v4l2_info(&csi_dev->v4l2_dev, "Registered sensor subdevice: %s\n",
-		  subdev->name);
-
-	return 0;
-}
-#else
 static int subdev_notifier_bound(struct v4l2_async_notifier *notifier,
 			    struct v4l2_subdev *subdev,
 			    struct v4l2_async_connection *asd)
@@ -2049,7 +2033,15 @@ static int subdev_notifier_bound(struct v4l2_async_notifier *notifier,
 
 	return 0;
 }
-#endif
+
+static void subdev_notifier_unbind(struct v4l2_async_notifier *notifier,
+			    struct v4l2_subdev *subdev,
+			    struct v4l2_async_connection *asd)
+{
+	struct mx6s_csi_dev *csi_dev = notifier_to_mx6s_dev(notifier);
+
+	csi_dev->sd = NULL;
+}
 
 static int mx6s_csi_mode_sel(struct mx6s_csi_dev *csi_dev)
 {
@@ -2103,6 +2095,7 @@ static int mx6s_csi_mode_sel(struct mx6s_csi_dev *csi_dev)
 
 static const struct v4l2_async_notifier_operations mx6s_capture_async_ops = {
 	.bound = subdev_notifier_bound,
+	.unbind = subdev_notifier_unbind,
 };
 
 static int mx6s_csi_two_8bit_sensor_mode_sel(struct mx6s_csi_dev *csi_dev)
@@ -2143,8 +2136,9 @@ static int mx6sx_register_subdevs(struct mx6s_csi_dev *csi_dev)
 			return -1;
 		}
 
+		csi_dev->fwnode = of_fwnode_handle(rem);
 		csi_dev->asd.match_type = V4L2_ASYNC_MATCH_FWNODE;
-		csi_dev->asd.match.fwnode = of_fwnode_handle(rem);
+		csi_dev->asd.match.fwnode = csi_dev->fwnode;
 		csi_dev->async_subdevs[0] = &csi_dev->asd;
 
 		of_node_put(rem);
