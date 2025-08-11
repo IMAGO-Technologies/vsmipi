@@ -1429,7 +1429,13 @@ static int mx6s_csi_close(struct file *file)
 	if (--csi_dev->open_count == 0) {
 		vb2_queue_release(&csi_dev->vb2_vidq);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,6,0)
+		if (v4l2_subdev_is_streaming(sd))
+			v4l2_subdev_call(sd, video, s_stream, 0);
+#endif
+
 		mx6s_csi_deinit(csi_dev);
+
 		v4l2_subdev_call(sd, core, s_power, 0);
 
 		file->private_data = NULL;
