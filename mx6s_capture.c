@@ -134,6 +134,7 @@
 #define BIT_MIPI_DATA_FORMAT_RAW8		(0x2a << 25)
 #define BIT_MIPI_DATA_FORMAT_RAW10		(0x2b << 25)
 #define BIT_MIPI_DATA_FORMAT_YUV422_8B	(0x1e << 25)
+#define BIT_MIPI_DATA_FORMAT_RGB565	(0x22 << 25)
 #define BIT_MIPI_DATA_FORMAT_MASK	(0x3F << 25)
 #define BIT_MIPI_DATA_FORMAT_OFFSET	25
 #define BIT_DATA_FROM_MIPI		(0x1 << 22)
@@ -286,6 +287,11 @@ static struct mx6s_fmt formats[] = {
 		.name		= "RAWRGB10 (SBGGR10)",
 		.pixelformat	= V4L2_PIX_FMT_SBGGR10,
 		.mbus_code	= MEDIA_BUS_FMT_SBGGR10_1X10,
+		.bpp		= 2,
+	}, {
+		.name		= "RGB565",
+		.pixelformat	= V4L2_PIX_FMT_RGB565,
+		.mbus_code	= MEDIA_BUS_FMT_RGB565_1X16,
 		.bpp		= 2,
  	}
 };
@@ -910,6 +916,7 @@ static int mx6s_configure_csi(struct mx6s_csi_dev *csi_dev)
 	case V4L2_PIX_FMT_YUV32:
 	case V4L2_PIX_FMT_SBGGR8:
 	case V4L2_PIX_FMT_SBGGR10:
+	case V4L2_PIX_FMT_RGB565:
 		width = pix->width;
 		break;
 	case V4L2_PIX_FMT_SBGGR10ALAW8:
@@ -952,6 +959,10 @@ static int mx6s_configure_csi(struct mx6s_csi_dev *csi_dev)
 		case V4L2_PIX_FMT_GREY:
 		case V4L2_PIX_FMT_SBGGR8:
 			cr18 |= BIT_MIPI_DATA_FORMAT_RAW8;
+			break;
+		case V4L2_PIX_FMT_RGB565:
+			cr18 |= BIT_MIPI_DATA_FORMAT_RGB565;
+			csi_dev->csi_two_8bit_sensor_mode = true;
 			break;
 		case V4L2_PIX_FMT_SBGGR10:
 		case V4L2_PIX_FMT_SBGGR10ALAW8:
