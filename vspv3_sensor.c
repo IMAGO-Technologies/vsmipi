@@ -25,11 +25,12 @@
 #include <linux/clk.h>
 #include <linux/of_device.h>
 #include <linux/of_gpio.h>
-#include <linux/pinctrl/consumer.h>
-#include <linux/regulator/consumer.h>
 #include <linux/v4l2-mediabus.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ctrls.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,18,0)
+ #include <media/mipi-csi2.h>	// -> MIPI_CSI2_DT_RAW8
+#endif
 #include "vsmipi.h"
 
 #define DEFAULT_FPS 30
@@ -39,19 +40,27 @@
 #endif
 
 
+struct sensor_mipi_plat_data {
+	u32 subdev_flags;
+};
+
 struct sensor_mipi {
-	struct v4l2_subdev		subdev;
+	const struct sensor_mipi_plat_data *plat_data;
+	struct v4l2_subdev subdev;
 	struct v4l2_pix_format pix;
-	const struct sensor_mipi_datafmt	*fmt;
+	const struct sensor_mipi_datafmt *fmt;
 	struct v4l2_captureparm streamcap;
 	int csi;
+	struct media_pad pad;
+	struct v4l2_ctrl_handler ctrl_handler;
+	struct v4l2_ctrl *link_freq_ctrl;
+	s64 link_freq;
 };
 
 struct sensor_mipi_datafmt {
 	u32	code;
-	enum v4l2_colorspace		colorspace;
+	enum v4l2_colorspace colorspace;
 };
-
 
 
 static const struct sensor_mipi_datafmt sensor_colour_fmts[] = {
@@ -59,8 +68,56 @@ static const struct sensor_mipi_datafmt sensor_colour_fmts[] = {
 	{MEDIA_BUS_FMT_SBGGR10_1X10, V4L2_COLORSPACE_RAW},
 	{MEDIA_BUS_FMT_SBGGR10_ALAW8_1X8, V4L2_COLORSPACE_RAW},
 	{MEDIA_BUS_FMT_RGB565_1X16, V4L2_COLORSPACE_RAW},
+	{MEDIA_BUS_FMT_Y8_1X8, V4L2_COLORSPACE_RAW},
 };
 
+
+static long sensor_mipi_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
+{
+	struct sensor_mipi *sensor = v4l2_get_subdevdata(sd);
+	long err = 0;
+	s64 *val64;
+
+	switch (cmd) {
+	case VSMIPI_V4L2_IOCTL_SET_CSI_FREQ:
+		// link_freq = (pixel_rate * bpp) / (2 * data_lanes)
+		val64 = arg;
+		sensor->link_freq = *val64;
+		break;
+	default:
+		err = -EINVAL;
+	}
+	
+	return err;
+}
+
+static int sensor_mipi_init_controls(struct sensor_mipi *sensor)
+{
+	int ret;
+
+	ret = v4l2_ctrl_handler_init(&sensor->ctrl_handler, 1);
+	if (ret)
+		return ret;
+
+	// V4L2_CID_LINK_FREQ is used by dw-mipi-csi2 and configued by IOCTL VSMIPI_V4L2_IOCTL_SET_CSI_FREQ from user space
+	sensor->link_freq_ctrl = v4l2_ctrl_new_int_menu(&sensor->ctrl_handler,
+						NULL,
+						V4L2_CID_LINK_FREQ,
+						0, 0,
+						&sensor->link_freq);
+
+	ret = sensor->ctrl_handler.error;
+	if (ret) {
+		v4l2_ctrl_handler_free(&sensor->ctrl_handler);
+		return ret;
+	}
+
+	sensor->link_freq_ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
+
+	sensor->subdev.ctrl_handler = &sensor->ctrl_handler;
+
+	return 0;
+}
 
 /* Find a data format by a pixel code in an array */
 static const struct sensor_mipi_datafmt
@@ -214,10 +271,6 @@ static int sensor_mipi_set_fmt(struct v4l2_subdev *sd,
 	sensor->pix.width = mf->width;
 	sensor->pix.height = mf->height;
 	return 0;
-
-/*	dev_err(&client->dev, "Set format failed %d, %d\n",
-		fmt->code, fmt->colorspace);
-	return -EINVAL;*/
 }
 
 
@@ -313,13 +366,38 @@ static int sensor_mipi_s_stream(struct v4l2_subdev *sd, int enable)
 	return 0;
 }
 
+
+// MIPI_CSI2_DT_RAW8 is declared since 5.18
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,18,0)
+static int sensor_mipi_get_frame_desc(struct v4l2_subdev *sd, unsigned int pad,
+				  struct v4l2_mbus_frame_desc *fd)
+{
+	struct v4l2_subdev_state *state;
+	const struct v4l2_mbus_framefmt *fmt;
+
+	state = v4l2_subdev_lock_and_get_active_state(sd);
+	fmt = v4l2_subdev_state_get_format(state, 0);
+	fd->type = V4L2_MBUS_FRAME_DESC_TYPE_CSI2;
+	fd->entry[fd->num_entries].pixelcode = fmt->code;
+	fd->entry[fd->num_entries].bus.csi2.dt = MIPI_CSI2_DT_RAW8;
+	fd->entry[fd->num_entries].bus.csi2.vc = 0;
+	dev_dbg(sd->dev, "%s using VC=%d and DT=%x\n",
+		__func__, fd->entry[fd->num_entries].bus.csi2.vc,
+		fd->entry[fd->num_entries].bus.csi2.dt);
+	fd->num_entries++;
+	v4l2_subdev_unlock_state(state);
+
+	return 0;
+}
+#endif
+
 static struct v4l2_subdev_video_ops sensor_mipi_subdev_video_ops = {
 	.g_parm = sensor_mipi_g_param,
 	.s_parm = sensor_mipi_s_param,
 	.s_stream = sensor_mipi_s_stream,
 };
 
-static const struct v4l2_subdev_pad_ops sensor_mipi_subdev_pad_ops = {
+static struct v4l2_subdev_pad_ops sensor_mipi_subdev_pad_ops = {
 	.enum_frame_size       = sensor_mipi_enum_framesizes,
 	.enum_frame_interval   = sensor_mipi_enum_frameintervals,
 	.enum_mbus_code        = sensor_mipi_enum_mbus_code,
@@ -337,10 +415,8 @@ static struct v4l2_subdev_ops sensor_mipi_subdev_ops = {
 	.pad	= &sensor_mipi_subdev_pad_ops,
 };
 
-
 static int sensor_mipi_probe(struct platform_device *pdev)
 {
-//	struct pinctrl *pinctrl;
 	struct device *dev = &pdev->dev;
 	int retval;
 	struct sensor_mipi *sensor;
@@ -350,24 +426,55 @@ static int sensor_mipi_probe(struct platform_device *pdev)
 	sensor->pix.pixelformat = V4L2_PIX_FMT_SBGGR8;
 	sensor->pix.width = 1920;
 	sensor->pix.height = 1080;
-//	sensor->streamcap.capability = V4L2_MODE_HIGHQUALITY |
-//					   V4L2_CAP_TIMEPERFRAME;
 	sensor->streamcap.capability = 0;
 	sensor->streamcap.capturemode = 0;
 	sensor->streamcap.timeperframe.denominator = DEFAULT_FPS;
 	sensor->streamcap.timeperframe.numerator = 1;
+	sensor->fmt = &sensor_colour_fmts[0];
+	sensor->link_freq = 1188000000 / 2;
+	sensor->plat_data = of_device_get_match_data(dev);
 
 	platform_set_drvdata(pdev, sensor);
 
 	// register v4l sub-device
 	v4l2_subdev_init(&sensor->subdev, &sensor_mipi_subdev_ops);
-//	sensor->subdev.flags =
+	sensor->subdev.flags |= sensor->plat_data->subdev_flags;
+	sensor->subdev.entity.function = MEDIA_ENT_F_CAM_SENSOR;
 	sensor->subdev.owner = THIS_MODULE;
 	sensor->subdev.dev = dev;
 	v4l2_set_subdevdata(&sensor->subdev, sensor);
 	snprintf(sensor->subdev.name, sizeof(sensor->subdev.name), "%s.%s",
 		 KBUILD_MODNAME, dev_name(dev));
-//	sensor->subdev.grp_id = 678;
+
+	if (sensor->plat_data->subdev_flags & V4L2_SUBDEV_FL_HAS_DEVNODE)
+	{
+		sensor->pad.flags = MEDIA_PAD_FL_SOURCE;
+		retval = media_entity_pads_init(&sensor->subdev.entity, 1, &sensor->pad);
+		if (retval) {
+			dev_err(dev, "failed to init entity pads: %d", retval);
+			return retval;
+		}
+
+		retval = sensor_mipi_init_controls(sensor);
+		if (retval) {
+			dev_err(dev, "failed to init controls: %d", retval);
+			return retval;
+		}
+
+		sensor_mipi_subdev_core_ops.ioctl = sensor_mipi_ioctl;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,18,0)
+		sensor_mipi_subdev_pad_ops.get_frame_desc = sensor_mipi_get_frame_desc;
+#endif
+	}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,19,0)
+	retval = v4l2_subdev_init_finalize(&sensor->subdev);
+	if (retval < 0) {
+		dev_err(dev, "Subdev init error: %d\n", retval);
+		return retval;
+	}
+#endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,13,0)
 	retval = v4l2_async_register_subdev(&sensor->subdev);
@@ -392,17 +499,36 @@ static void sensor_mipi_remove(struct platform_device *pdev)
 	struct sensor_mipi *sensor = platform_get_drvdata(pdev);
 
 	v4l2_async_unregister_subdev(&sensor->subdev);
-
-//	clk_disable_unprepare(sensor->sensor_clk);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,19,0)
+	v4l2_subdev_cleanup(&sensor->subdev);
+#endif
+	if (sensor->plat_data->subdev_flags & V4L2_SUBDEV_FL_HAS_DEVNODE)
+	{
+		v4l2_ctrl_handler_free(&sensor->ctrl_handler);
+		media_entity_cleanup(&sensor->subdev.entity);
+	}
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6,10,0)
 	return 0;
 #endif
 }
 
+static const struct sensor_mipi_plat_data vspv3_data = {
+};
+
+static const struct sensor_mipi_plat_data vspv4_data = {
+	.subdev_flags = V4L2_SUBDEV_FL_HAS_DEVNODE,
+};
+
 #ifdef CONFIG_OF
 static const struct of_device_id sensor_mipi_v2_of_match[] = {
-	{ .compatible = "imago,sensor_mipi",
+	{
+		.compatible = "imago,sensor_mipi",
+		.data = &vspv3_data,
+	},
+	{
+		.compatible = "imago,imx95-sensor_mipi",
+		.data = &vspv4_data,
 	},
 	{ /* sentinel */ }
 };

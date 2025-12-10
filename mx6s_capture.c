@@ -1978,8 +1978,6 @@ static int mx6s_vidioc_enum_frameintervals(struct file *file, void *priv,
 	return 0;
 }
 
-#define VSMIPI_V4L2_IOCTL_GET_VERSION	_IOR('V', BASE_VIDIOC_PRIVATE + 0, char[32])
-
 static long mx6s_vidioc_default(struct file *file, void *priv,
 				   bool valid_prio, unsigned int cmd, void *arg)
 {

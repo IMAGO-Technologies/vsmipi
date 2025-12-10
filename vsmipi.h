@@ -20,10 +20,11 @@
 #ifndef VSMIPI_H_
 #define VSMIPI_H_
 
-//> defines about the Module
-/******************************************************************************************/
-#define MODVERSION "1.3.2.0"	// (also used as DKMS module version)
+#define MODVERSION "1.4.0.0"	// (also used as DKMS module version)
 #define MODMODULENAME "vsmipi"
+
+#define VSMIPI_V4L2_IOCTL_GET_VERSION	_IOR('V', BASE_VIDIOC_PRIVATE + 0, char[32])
+#define VSMIPI_V4L2_IOCTL_SET_CSI_FREQ	_IOW('V', BASE_VIDIOC_PRIVATE + 1, s64)
 
 #endif /* VSMIPI_H_ */
 
