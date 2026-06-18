@@ -20,7 +20,6 @@
 #ifndef VSMIPI_H_
 #define VSMIPI_H_
 
-#define MODVERSION "1.4.0.0"	// (also used as DKMS module version)
 #define MODMODULENAME "vsmipi"
 
 #define VSMIPI_V4L2_IOCTL_GET_VERSION	_IOR('V', BASE_VIDIOC_PRIVATE + 0, char[32])

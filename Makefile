@@ -21,7 +21,10 @@ else
   DEBFLAGS = -O2  
 endif
 
-ccflags-y := $(DEBFLAGS) -Werror -Wall -Wno-unused-parameter -Wno-date-time 
+# include dkms.conf for PACKAGE_VERSION
+include $(PWD)/dkms.conf
+
+ccflags-y := $(DEBFLAGS) -DMODVERSION=\"$(PACKAGE_VERSION)\" -Werror -Wall -Wno-unused-parameter -Wno-date-time 
 vsmipi-objs := vspv3_sensor.o
 obj-m	:= vsmipi.o mx6s_capture.o
 
