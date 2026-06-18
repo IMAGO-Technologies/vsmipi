@@ -2,17 +2,11 @@
 # or call make DEBUG=y default is DEBUG=n
 #DEBUG = y
 
-# Add your debugging flag (or not) to EXTRA_CLAGS
-#Note:
-# for kernel upto 2.6.23 uses
-# 		CFLAGS
-#
-# later it used EXTRA_CLAGS instead of CFLAGS 
-#		e.g: EXTRA_CLAGS += $(DEBFLAGS) 
-#
-# since ~2007/2009 it uses ccflags-y
-#		e.g: ccflags-y += -v
-#
+# get directory of this module
+M ?= $(shell pwd)
+
+# include dkms.conf for PACKAGE_VERSION
+include $(M)/dkms.conf
 
 ifeq ($(DEBUG),y)
   DEBFLAGS = -O -g -DDEBUG # "-O" is needed to expand inlines
@@ -20,9 +14,6 @@ ifeq ($(DEBUG),y)
 else
   DEBFLAGS = -O2  
 endif
-
-# include dkms.conf for PACKAGE_VERSION
-include $(PWD)/dkms.conf
 
 ccflags-y := $(DEBFLAGS) -DMODVERSION=\"$(PACKAGE_VERSION)\" -Werror -Wall -Wno-unused-parameter -Wno-date-time 
 vsmipi-objs := vspv3_sensor.o
@@ -35,7 +26,7 @@ KERNELDIR ?= /lib/modules/$(shell uname -r)/build
 
 
 default:
-	$(MAKE) -C $(KERNELDIR) M=$(PWD) modules 
+	$(MAKE) -C $(KERNELDIR) M=$(M) modules 
 
 # create a file like 'vsvpfedrv4.9.59-rt23-visioncam-xm-1.0.0.0_armv7l.ko'
 deploy:
@@ -55,6 +46,6 @@ clean:
 
 #default /lib/modules/$(KERNELRELEASE)/extra
 install:
-	make -C $(KERNELDIR) M=$(PWD) modules_install
+	make -C $(KERNELDIR) M=$(M) modules_install
 	depmod -a 
 
