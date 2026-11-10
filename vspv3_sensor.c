@@ -145,6 +145,8 @@ static int sensor_mipi_s_power(struct v4l2_subdev *sd, int on)
 	return 0;
 }
 
+#ifdef CONFIG_ARCH_MXC	// exclude for compile test with sparse (.g_parm / .s_parm are not defined)
+
 /*!
  * sensor_mipi_g_param - V4L2 sensor interface handler for VIDIOC_G_PARM ioctl
  * @s: pointer to standard V4L2 sub device structure
@@ -245,6 +247,8 @@ static int sensor_mipi_s_param(struct v4l2_subdev *sd, struct v4l2_streamparm *a
 
 	return ret;
 }
+
+#endif
 
 static int sensor_mipi_set_fmt(struct v4l2_subdev *sd,
 			struct v4l2_subdev_state *state,
@@ -392,8 +396,10 @@ static int sensor_mipi_get_frame_desc(struct v4l2_subdev *sd, unsigned int pad,
 #endif
 
 static struct v4l2_subdev_video_ops sensor_mipi_subdev_video_ops = {
+#ifdef CONFIG_ARCH_MXC
 	.g_parm = sensor_mipi_g_param,
 	.s_parm = sensor_mipi_s_param,
+#endif
 	.s_stream = sensor_mipi_s_stream,
 };
 

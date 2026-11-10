@@ -13,7 +13,9 @@
  */
 #include <asm/dma.h>
 #include <linux/version.h>
+#ifdef CONFIG_ARCH_MXC
 #include <linux/busfreq-imx.h>
+#endif
 #include <linux/clk.h>
 #include <linux/dma-mapping.h>
 #include <linux/delay.h>
@@ -382,13 +384,13 @@ static inline void __dma_sync_for_device(struct device *dev, dma_addr_t dma_addr
 {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,20,0)
 	dev->archdata.dma_coherent = 0;
-#else
+#elif defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_DEVICE)
 	dev->dma_coherent = 0;
 #endif
 	dma_sync_single_for_device(dev, dma_addr, dma_size, DMA_FROM_DEVICE);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,20,0)
 	dev->archdata.dma_coherent = 1;
-#else
+#elif defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_DEVICE)
 	dev->dma_coherent = 1;
 #endif
 }
@@ -397,13 +399,13 @@ static inline void __dma_sync_for_cpu(struct device *dev, dma_addr_t dma_addr, u
 {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,20,0)
 	dev->archdata.dma_coherent = 0;
-#else
+#elif defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_CPU)
 	dev->dma_coherent = 0;
 #endif
 	dma_sync_single_for_cpu(dev, dma_addr, dma_size, DMA_FROM_DEVICE);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,20,0)
 	dev->archdata.dma_coherent = 1;
-#else
+#elif defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_CPU)
 	dev->dma_coherent = 1;
 #endif
 }
@@ -1073,7 +1075,7 @@ static void mx6s_stop_streaming(struct vb2_queue *vq)
 		list_del_init(&ibuf->queue);
 		if (!ibuf->discard) {
 			buf = mx6s_ibuf_to_buf(ibuf);
-		    if (buf->vb.vb2_buf.state == VB2_BUF_STATE_ACTIVE)
+			if (buf->vb.vb2_buf.state == VB2_BUF_STATE_ACTIVE)
 				vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_ERROR);
 		}
 	}
@@ -1417,7 +1419,9 @@ static int mx6s_csi_open(struct file *file)
 
 		pm_runtime_get_sync(csi_dev->dev);
 
+#ifdef CONFIG_ARCH_MXC
 		request_bus_freq(BUS_FREQ_HIGH);
+#endif
 
 		v4l2_subdev_call(sd, core, s_power, 1);
 		mx6s_csi_init(csi_dev);
@@ -1451,7 +1455,9 @@ static int mx6s_csi_close(struct file *file)
 
 		file->private_data = NULL;
 
+#ifdef CONFIG_ARCH_MXC
 		release_bus_freq(BUS_FREQ_HIGH);
+#endif
 
 		pm_runtime_put_sync_suspend(csi_dev->dev);
 	}
@@ -1881,7 +1887,11 @@ static int mx6s_vidioc_g_parm(struct file *file, void *priv,
 	struct mx6s_csi_dev *csi_dev = video_drvdata(file);
 	struct v4l2_subdev *sd = csi_dev->sd;
 
+#ifdef CONFIG_ARCH_MXC
 	return v4l2_subdev_call(sd, video, g_parm, a);
+#else
+	return v4l2_subdev_call(sd, video, s_stream, 0);
+#endif
 }
 
 static int mx6s_vidioc_s_parm(struct file *file, void *priv,
@@ -1908,7 +1918,11 @@ static int mx6s_vidioc_s_parm(struct file *file, void *priv,
 		return 0;
 	}
 
+#ifdef CONFIG_ARCH_MXC
 	return v4l2_subdev_call(sd, video, s_parm, a);
+#else
+	return 0;
+#endif
 }
 
 static int mx6s_vidioc_enum_framesizes(struct file *file, void *priv,
@@ -2160,8 +2174,10 @@ static int mx6sx_register_subdevs(struct mx6s_csi_dev *csi_dev)
 		break;
 	}
 
+#ifdef CONFIG_ARCH_MXC
 	csi_dev->subdev_notifier.subdevs = csi_dev->async_subdevs;
 	csi_dev->subdev_notifier.num_subdevs = 1;
+#endif
 	csi_dev->subdev_notifier.ops = &mx6s_capture_async_ops;
 
 	ret = v4l2_async_notifier_register(&csi_dev->v4l2_dev,
