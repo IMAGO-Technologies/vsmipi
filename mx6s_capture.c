@@ -1111,7 +1111,7 @@ static struct vb2_ops mx6s_videobuf_ops = {
 	.buf_prepare     = mx6s_videobuf_prepare,
 	.buf_queue       = mx6s_videobuf_queue,
 	.buf_finish      = mx6s_videobuf_buf_finish,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(7,0,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7,0,0)
 	.wait_prepare    = vb2_ops_wait_prepare,
 	.wait_finish     = vb2_ops_wait_finish,
 #endif
